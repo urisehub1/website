@@ -442,8 +442,8 @@ function animP(){
 function coinRain(n,em){em=em||'🪙';for(let i=0;i<n;i++){setTimeout(()=>{const el=document.createElement('div');el.className='cp';el.textContent=em;el.style.left=Math.random()*100+'vw';el.style.top='-20px';el.style.animationDuration=(1.4+Math.random())+'s';document.body.appendChild(el);setTimeout(()=>{if(el.parentNode)el.remove()},2800)},i*55)}}
 
 // ── GAME DATA ──
-const WILD_S={s:'🃏',l:'WILD',v:0,w:2,wild:true};
-const SCAT_S={s:'💎',l:'SCAT',v:0,w:3,scat:true};
+const WILD_S={s:'🃏',l:'WILD',v:0,w:1.5,wild:true};
+const SCAT_S={s:'💎',l:'SCAT',v:0,w:0.25,scat:true};
 const NORM=[{s:'👑',l:'ACE',v:500,w:1},{s:'👸',l:'Q',v:200,w:2},{s:'🤴',l:'J',v:150,w:3},{s:'♠',l:'Spade',v:80,w:5},{s:'♥',l:'Heart',v:60,w:6},{s:'♦',l:'Dia',v:40,w:7},{s:'♣',l:'Club',v:30,w:8}];
 const ALL=[...NORM,WILD_S,SCAT_S];
 
@@ -501,18 +501,26 @@ function calcWin(g2){
   for(let r=0;r<R;r++){
     let c=0;
     while(c<C){
-      // Find base symbol (non-wild, non-scat)
+      // Find base symbol (non-wild, non-scat) starting from c
       let base=null;
-      for(let k=c;k<C;k++){if(!g2[r][k].wild&&!g2[r][k].scat){base=g2[r][k];break}}
-      if(!base){c++;continue}
+      let searchStart=c;
+      for(let k=searchStart;k<C;k++){
+        if(!g2[r][k].wild&&!g2[r][k].scat){base=g2[r][k];break}
+      }
+      if(!base){
+        // all remaining in row are wild/scat — no more normal runs possible
+        c=C;
+        break;
+      }
+      // Count run of wilds + this base starting from c
       let run=0,start=c;
       while(c<C){
         const s=g2[r][c];
         if(s.scat)break;
-        if(s.wild||s.s===base.s)run++;
+        if(s.wild||s.s===base.s){run++;c++;}
         else break;
-        c++;
       }
+      if(run===0){c++;continue;} // safety: always advance
       if(run>=3){
         const mult=run===3?6:run===4?15:30;
         tw+=Math.round(bet*mult*(base.v/80));
@@ -590,35 +598,46 @@ function clearLines(){
 }
 function smashCells(cells,cb){
   if(!cells||cells.size===0){cb();return}
-  cells.forEach(k=>{
-    const el=document.getElementById('c'+k);
-    if(el){el.classList.add('smash');const[,c]=k.split('_').map(Number);sfx.smash(c)}
-  });
-  setTimeout(()=>{
+  try{
     cells.forEach(k=>{
       const el=document.getElementById('c'+k);
-      if(el){el.style.visibility='hidden';el.classList.remove('smash','win','wwin','jk','swin')}
+      if(el){el.classList.add('smash');const[,c]=k.split('_').map(Number);sfx.smash(c)}
     });
+  }catch(e){}
+  setTimeout(()=>{
+    try{
+      cells.forEach(k=>{
+        const el=document.getElementById('c'+k);
+        if(el){el.style.visibility='hidden';el.classList.remove('smash','win','wwin','jk','swin')}
+      });
+    }catch(e){}
     cb();
   },400);
 }
 function cascadeDown(cells,cb){
-  const colsAff=new Set();
-  cells.forEach(k=>{const[,c]=k.split('_').map(Number);colsAff.add(c)});
-  colsAff.forEach(c=>{
-    const rem=[];
-    for(let r=R-1;r>=0;r--){if(!cells.has(r+'_'+c))rem.push(grid[r][c])}
-    for(let r=R-1;r>=0;r--){const idx=R-1-r;grid[r][c]=idx<rem.length?rem[idx]:pickSym()}
-  });
-  setTimeout(()=>{
-    colsAff.forEach(c=>{
-      for(let r=0;r<R;r++){
-        const el=document.getElementById('c'+r+'_'+c);
-        if(el){el.style.visibility='visible';setCell(el,grid[r][c],true);sfx.fall(c)}
-      }
+  try{
+    const colsAff=new Set();
+    cells.forEach(k=>{const[,c]=k.split('_').map(Number);colsAff.add(c)});
+    colsAff.forEach(col=>{
+      const rem=[];
+      for(let r=R-1;r>=0;r--){if(!cells.has(r+'_'+col))rem.push(grid[r][col])}
+      for(let r=R-1;r>=0;r--){const idx=R-1-r;grid[r][col]=idx<rem.length?rem[idx]:pickSym()}
     });
-    setTimeout(cb,580);
-  },60);
+    setTimeout(()=>{
+      try{
+        colsAff.forEach(col=>{
+          for(let r=0;r<R;r++){
+            const el=document.getElementById('c'+r+'_'+col);
+            if(el){el.style.visibility='visible';setCell(el,grid[r][col],true);sfx.fall(col)}
+          }
+        });
+      }catch(e){}
+      setTimeout(cb,550);
+    },60);
+  }catch(e){
+    // If anything fails, still call cb after a delay
+    setTimeout(cb,700);
+  }
 }
 
 // ── FREE SPIN ──
@@ -680,6 +699,16 @@ function litW(id){
 
 // ── SPIN ──
 let cascMul=1,roundWin=0;
+let cascadeDepth=0; // safety: prevent infinite cascade
+
+let watchdogTimer=null;
+function unlockSpin(){
+  clearTimeout(watchdogTimer);
+  watchdogTimer=null;
+  spinning=false;
+  const spb=document.getElementById('spb');
+  if(spb){spb.disabled=false;spb.classList.remove('go');}
+}
 
 function doSpin(){
   if(spinning)return;
@@ -691,8 +720,14 @@ function doSpin(){
   }
   sfx.click();gac();
   spinning=true;
+  cascadeDepth=0;
+  // Watchdog: if spin not finished in 15s, force unlock
+  clearTimeout(watchdogTimer);
+  watchdogTimer=setTimeout(()=>{
+    if(spinning){console.warn('watchdog fired');finishSpin(roundWin);}
+  },15000);
   clearWin();clearLines();
-  if(!inFS){balance-=bet}
+  if(!inFS){balance-=bet;}
   updHUD(0);
   cascMul=1;roundWin=0;
 
@@ -703,32 +738,42 @@ function doSpin(){
   // Fill grid
   for(let r=0;r<R;r++)for(let c=0;c<C;c++)grid[r][c]=pickSym();
 
-  let colDone=0;
-  const totalCols=C;
-  for(let c=0;c<totalCols;c++){
-    const delay=c*90;
+  // Animate columns dropping in, then call resolveGrid once ALL done
+  const TOTAL_ANIM_MS = (C-1)*90 + R*55 + 600; // max time for all drops
+  for(let c=0;c<C;c++){
+    const cc=c; // capture
     setTimeout(()=>{
       for(let r=0;r<R;r++){
-        const el=document.getElementById('c'+r+'_'+c);
+        const rr=r;
+        const el=document.getElementById('c'+rr+'_'+cc);
         if(el){
           el.style.visibility='visible';
           setTimeout(()=>{
-            if(el){setCell(el,grid[r][c],true);sfx.fall(c)}
-          },r*55);
+            if(el){setCell(el,grid[rr][cc],true);sfx.fall(cc);}
+          },rr*55);
         }
       }
-      colDone++;
-      if(colDone===totalCols){
-        setTimeout(()=>{resolveGrid()},R*55+560);
-      }
-    },delay);
+    },cc*90);
   }
+  // Single reliable timeout — no counter logic
+  setTimeout(()=>{ resolveGrid(); }, TOTAL_ANIM_MS);
 }
 
 function resolveGrid(){
-  const{win,cells,scatCount,scatCells}=calcWin(grid);
+  // Safety valve: max 20 cascades then force-finish
+  cascadeDepth++;
+  if(cascadeDepth>20){
+    console.warn('cascade limit hit');
+    finishSpin(roundWin);
+    return;
+  }
 
-  // Scatter trigger free spins (only when not already in free spins)
+  let result;
+  try{ result=calcWin(grid); }
+  catch(e){ console.error('calcWin error',e); finishSpin(roundWin); return; }
+  const{win,cells,scatCount,scatCells}=result;
+
+  // Scatter → free spins (only outside free spin mode)
   if(scatCount>=3&&!inFS){
     scatCells.forEach(k=>{
       const el=document.getElementById('c'+k);
@@ -737,10 +782,7 @@ function resolveGrid(){
     sfx.scatHit();litW('wscat');
     setTimeout(()=>{
       clearWin();clearLines();
-      // finish this spin first, then announce
-      const spb=document.getElementById('spb');
-      spb.disabled=false;spb.classList.remove('go');
-      spinning=false;
+      unlockSpin();
       updHUD(0);
       document.getElementById('wb').innerHTML='<span class="wba">💎 ৩টি SCATTER! FREE SPIN আসছে!</span>';
       setTimeout(announceFS,700);
@@ -748,7 +790,8 @@ function resolveGrid(){
     return;
   }
 
-  if(win===0&&cells.size===0){
+  // No win this cascade → finish round
+  if(win===0||cells.size===0){
     clearLines();
     finishSpin(roundWin);
     return;
@@ -760,7 +803,10 @@ function resolveGrid(){
   sfx.cascade();
 
   let hasW=false;
-  cells.forEach(k=>{const[r,c]=k.split('_').map(Number);if(grid[r]&&grid[r][c]&&grid[r][c].wild)hasW=true});
+  cells.forEach(k=>{
+    const[r,c]=k.split('_').map(Number);
+    if(grid[r]&&grid[r][c]&&grid[r][c].wild)hasW=true;
+  });
   if(hasW)sfx.wildHit();
   if(isJk)sfx.mega();
 
@@ -797,10 +843,7 @@ function finishSpin(totalWin){
   balance+=totalWin;
   if(totalWin>bestWin)bestWin=totalWin;
 
-  const spb=document.getElementById('spb');
-  spb.classList.remove('go');
-  spb.disabled=false;
-  spinning=false;
+  unlockSpin();
 
   if(inFS){
     freeSpins--;
